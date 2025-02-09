@@ -1,0 +1,7 @@
+|x y|
+
+proc moveNorth: steps [
+  [ move: steps. ]
+]
+
+[ moveNorth: 3. ]
