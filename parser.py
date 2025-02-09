@@ -5,13 +5,14 @@ Robot Control Language Parser (Procedural Version)
 This parser implements a syntax checker for a robot–control language.
 It supports:
   - Global and local variable declarations (using | ... |)
-  - Procedure definitions
+  - Procedure definitions with parameters using both the standard (":")
+    and alternate label syntaxes (e.g. "andBalloons:" or "ofType:")
   - Assignments (using :=)
-  - Procedure calls
+  - Procedure calls (with parameter passing using labeled parameters)
   - Control structures: while and if-else
   - Basic expressions: numbers, identifiers, and hash–prefixed identifiers
 
-The parser is built using only regular expressions (for tokenization)
+The parser is built using regular expressions (for tokenization)
 and a recursive–descent parser based on a context–free grammar.
 """
 
@@ -141,7 +142,7 @@ def parse_variable_declaration():
     expect('PIPE')
     return vars_list
 
-# ProcedureDefinition -> "proc" Identifier { COLON Identifier } CodeBlock
+# ProcedureDefinition -> "proc" Identifier { (COLON | (ID starting with "and")) Parameter } CodeBlock
 def parse_procedure_definition():
     expect('ID', 'proc')
     if current_token() is None or current_token()[0] != 'ID':
@@ -150,14 +151,25 @@ def parse_procedure_definition():
     advance()
     
     params = []
-    # Parse parameters: each parameter is preceded by COLON
-    while current_token() and current_token()[0] == 'COLON':
-        advance()  # skip COLON
-        if current_token() is None or current_token()[0] != 'ID':
-            error("Expected parameter name after ':'")
-        params.append(current_token()[1])
-        advance()
-    
+    # Loop to allow parameters using ":" or an alternative label (e.g., "andBalloons:")
+    while True:
+        token = current_token()
+        if token and token[0] == 'COLON':
+            advance()  # skip COLON
+            if current_token() is None or current_token()[0] != 'ID':
+                error("Expected parameter name after ':'")
+            params.append(current_token()[1])
+            advance()
+        elif token and token[0] == 'ID' and token[1].startswith("and"):
+            advance()  # skip the label (e.g., "andBalloons")
+            expect('COLON')
+            if current_token() is None or current_token()[0] != 'ID':
+                error("Expected parameter name after 'and...:'")
+            params.append(current_token()[1])
+            advance()
+        else:
+            break
+
     body = parse_code_block()
     proc_def = {'name': proc_name, 'params': params, 'body': body}
     procedures[proc_name] = proc_def
@@ -200,17 +212,42 @@ def parse_assignment():
     expect('DOT')
     return ('assign', var_name, expr)
 
-# ProcedureCall -> ID { COLON Expression } DOT
+# ProcedureCall -> ID { ParameterPart } [DOT]
+# ParameterPart -> [ Label ] COLON Expression
+# A Label is an ID token immediately followed by a COLON.
+# Here, the trailing DOT is required unless the next token is RBRACKET.
 def parse_procedure_call():
-    if current_token() is None or current_token()[0] != 'ID':
+    global pos, tokens
+    token = current_token()
+    if token is None or token[0] != 'ID':
         error("Expected procedure name in procedure call")
-    proc_name = current_token()[1]
+    proc_name = token[1]
     advance()  # consume procedure name
     args = []
-    while current_token() and current_token()[0] == 'COLON':
-        advance()  # skip COLON
-        args.append(parse_expression())
-    expect('DOT')
+    # Look for parameters
+    while current_token() is not None:
+        token = current_token()
+        if token[0] == 'COLON':
+            # No label provided: just a colon then expression.
+            advance()  # skip COLON
+            args.append(parse_expression())
+        elif token[0] == 'ID':
+            # Look ahead: if the next token is COLON, treat current ID as a label.
+            if pos + 1 < len(tokens) and tokens[pos+1][0] == 'COLON':
+                advance()  # skip label token (e.g., "ofType", "with", etc.)
+                expect('COLON')
+                args.append(parse_expression())
+            else:
+                break
+        else:
+            break
+    # If a DOT is present, consume it.
+    # Otherwise, if the next token is RBRACKET, consider the DOT optional.
+    token = current_token()
+    if token is not None and token[0] == 'DOT':
+        advance()
+    elif token is not None and token[0] != 'RBRACKET':
+        error("Expected token type DOT or end-of-block but got " + str(token))
     return ('proc_call', proc_name, args)
 
 # ControlStructure -> WhileStructure | IfStructure
@@ -224,7 +261,6 @@ def parse_control_structure():
         error("Unknown control structure")
 
 # WhileStructure -> "while" COLON Condition "do" COLON CodeBlock
-# (For simplicity, the condition is parsed as a sequence of expressions separated by COLON)
 def parse_while_structure():
     expect('ID', 'while')
     expect('COLON')
