@@ -1,32 +1,31 @@
 #!/usr/bin/env python3
 """
-Robot Control Language Parser (Procedural Version)
+logic.py
 
-This parser implements a syntax checker for a robot–control language.
-It supports:
-  - Global and local variable declarations (using | ... |)
-  - Procedure definitions with parameters using both the standard (":")
-    and alternate label syntaxes (e.g. "andBalloons:" or "ofType:")
-  - Assignments (using :=)
-  - Procedure calls (with parameter passing using labeled parameters)
-  - Control structures: while and if-else
-  - Basic expressions: numbers, identifiers, and hash–prefixed identifiers
+Este archivo contiene la lógica de nuestro parser para el lenguaje de control de robot.
+Utiliza expresiones regulares para el análisis léxico (tokenización) y un parser
+recursivo-descendente basado en una gramática libre de contexto para verificar la sintaxis.
 
-The parser is built using regular expressions (for tokenization)
-and a recursive–descent parser based on a context–free grammar.
+El módulo expone la función check_file(filename) que retorna True si el archivo cumple
+con las reglas del lenguaje o False en caso contrario.
 """
 
 import re
-import sys
+
+# Variables globales de estado del parser
+tokens = []   # Lista de tokens generada por tokenize()
+pos = 0       # Posición actual en la lista de tokens
+variables = set()   # Variables globales
+procedures = {}     # Procedimientos definidos
 
 # --------------------------------------------------
-# Tokenization (Lexer)
+# Tokenización (Lexer)
 # --------------------------------------------------
 def tokenize(text):
-    # Order matters: longer tokens like ":=" must come before ":".
+    # El orden importa: tokens más largos como ":=" deben ir antes de ":".
     token_specs = [
-        ('ASSIGN',   r':='),   # assignment operator
-        ('HASHID',   r'#[A-Za-z_][A-Za-z0-9_]*'),  # e.g., #chips, #north
+        ('ASSIGN',   r':='),   # Operador de asignación
+        ('HASHID',   r'#[A-Za-z_][A-Za-z0-9_]*'),  # Ej: #chips, #north
         ('NUMBER',   r'\d+'),
         ('ID',       r'[A-Za-z_][A-Za-z0-9_]*'),
         ('PIPE',     r'\|'),
@@ -34,7 +33,7 @@ def tokenize(text):
         ('RBRACKET', r'\]'),
         ('COLON',    r':'),
         ('DOT',      r'\.'),
-        ('COMMA',    r','),    # for separating local variable declarations
+        ('COMMA',    r','),    # Para separar variables locales
         ('SKIP',     r'[ \t]+'),
         ('NEWLINE',  r'\n'),
         ('MISMATCH', r'.'),
@@ -66,15 +65,8 @@ def tokenize(text):
     return tokens
 
 # --------------------------------------------------
-# Global Parser State
+# Funciones auxiliares para el parser
 # --------------------------------------------------
-tokens = []   # list of tokens (populated by tokenize)
-pos = 0       # current position in tokens
-
-# Global symbol tables for global variables and procedures
-variables = set()
-procedures = {}
-
 def current_token():
     global tokens, pos
     if pos < len(tokens):
@@ -103,25 +95,25 @@ def error(message):
         raise Exception(f"Syntax error at end of input: {message}")
 
 # --------------------------------------------------
-# Parsing Functions (Recursive–Descent)
+# Funciones de Parsing (Parser Recursivo-Descendente)
 # --------------------------------------------------
 
-# Program -> VariableDeclaration ProcedureDefinitions MainBlock
+# Programa -> VariableDeclaration ProcedureDefinitions MainBlock
 def parse_program():
     program = {}
-    # Optional global variable declaration
+    # Declaración global de variables (opcional)
     if current_token() and current_token()[0] == 'PIPE':
         program['variables'] = parse_variable_declaration()
     else:
         program['variables'] = []
     
-    # Zero or more procedure definitions
+    # Procedimientos (cero o más)
     proc_defs = []
     while current_token() and current_token()[0] == 'ID' and current_token()[1] == 'proc':
         proc_defs.append(parse_procedure_definition())
     program['procedures'] = proc_defs
     
-    # Optional main code block
+    # Bloque principal (opcional)
     if current_token() and current_token()[0] == 'LBRACKET':
         program['main'] = parse_code_block()
     else:
@@ -129,7 +121,6 @@ def parse_program():
     return program
 
 # VariableDeclaration -> "|" IdentifierList "|"
-# Supports both global declarations (space-separated) and local ones (comma-separated)
 def parse_variable_declaration():
     vars_list = []
     expect('PIPE')
@@ -151,17 +142,17 @@ def parse_procedure_definition():
     advance()
     
     params = []
-    # Loop to allow parameters using ":" or an alternative label (e.g., "andBalloons:")
+    # Parámetros: pueden indicarse con ":" o con una etiqueta alternativa (ej: "andBalloons:")
     while True:
         token = current_token()
         if token and token[0] == 'COLON':
-            advance()  # skip COLON
+            advance()  # saltamos el ":"
             if current_token() is None or current_token()[0] != 'ID':
                 error("Expected parameter name after ':'")
             params.append(current_token()[1])
             advance()
         elif token and token[0] == 'ID' and token[1].startswith("and"):
-            advance()  # skip the label (e.g., "andBalloons")
+            advance()  # saltamos la etiqueta (ej: "andBalloons")
             expect('COLON')
             if current_token() is None or current_token()[0] != 'ID':
                 error("Expected parameter name after 'and...:'")
@@ -189,16 +180,16 @@ def parse_instruction():
     token = current_token()
     if token is None:
         error("Unexpected end of input in instruction")
-    # Local variable declaration starts with PIPE
+    # Declaración local de variables
     if token[0] == 'PIPE':
         return parse_variable_declaration()
-    # Control structures: if or while
+    # Estructuras de control: if o while
     if token[0] == 'ID' and token[1] in ('if', 'while'):
         return parse_control_structure()
-    # Assignment: if an ID is followed by ASSIGN
+    # Asignación: si un ID es seguido por ":="
     if token[0] == 'ID' and (pos + 1 < len(tokens) and tokens[pos+1][0] == 'ASSIGN'):
         return parse_assignment()
-    # Otherwise, assume a procedure call
+    # Por defecto, se asume que es una llamada a procedimiento.
     return parse_procedure_call()
 
 # Assignment -> ID ASSIGN Expression DOT
@@ -206,7 +197,7 @@ def parse_assignment():
     if current_token() is None or current_token()[0] != 'ID':
         error("Expected variable name in assignment")
     var_name = current_token()[1]
-    advance()  # consume variable name
+    advance()  # consumir el nombre de la variable
     expect('ASSIGN')
     expr = parse_expression()
     expect('DOT')
@@ -214,35 +205,32 @@ def parse_assignment():
 
 # ProcedureCall -> ID { ParameterPart } [DOT]
 # ParameterPart -> [ Label ] COLON Expression
-# A Label is an ID token immediately followed by a COLON.
-# Here, the trailing DOT is required unless the next token is RBRACKET.
 def parse_procedure_call():
     global pos, tokens
     token = current_token()
     if token is None or token[0] != 'ID':
         error("Expected procedure name in procedure call")
     proc_name = token[1]
-    advance()  # consume procedure name
+    advance()  # consumir el nombre del procedimiento
     args = []
-    # Look for parameters
+    # Se buscan parámetros: pueden venir con o sin etiqueta.
     while current_token() is not None:
         token = current_token()
         if token[0] == 'COLON':
-            # No label provided: just a colon then expression.
-            advance()  # skip COLON
+            # Sin etiqueta: se consume el ":" y se analiza la expresión.
+            advance()
             args.append(parse_expression())
         elif token[0] == 'ID':
-            # Look ahead: if the next token is COLON, treat current ID as a label.
+            # Si el siguiente token es ":" se interpreta que el ID es una etiqueta.
             if pos + 1 < len(tokens) and tokens[pos+1][0] == 'COLON':
-                advance()  # skip label token (e.g., "ofType", "with", etc.)
+                advance()  # se salta la etiqueta (ej: "ofType" o "with")
                 expect('COLON')
                 args.append(parse_expression())
             else:
                 break
         else:
             break
-    # If a DOT is present, consume it.
-    # Otherwise, if the next token is RBRACKET, consider the DOT optional.
+    # Se consume el punto final (DOT), que es opcional si el siguiente token es "RBRACKET"
     token = current_token()
     if token is not None and token[0] == 'DOT':
         advance()
@@ -301,7 +289,7 @@ def parse_if_structure():
         else_block = parse_code_block()
     return ('if', cond_parts, then_block, else_block)
 
-# Condition is simplified to an expression for our parser
+# Condition se trata simplemente como una expresión en este parser
 def parse_condition():
     return parse_expression()
 
@@ -322,36 +310,24 @@ def parse_expression():
         error("Expected an expression (NUMBER, ID, or HASHID)")
 
 # --------------------------------------------------
-# Main Function
+# Función principal de la lógica
 # --------------------------------------------------
-def main():
+def check_file(filename):
+    """
+    Lee el archivo cuyo nombre se pasa como parámetro, lo tokeniza y lo parsea.
+    Retorna True si el archivo cumple con las reglas del lenguaje; False en caso contrario.
+    """
     global tokens, pos, variables, procedures
-    if len(sys.argv) < 2:
-        print("Usage: python parser.py <filename>")
-        sys.exit(1)
-    
-    filename = sys.argv[1]
     try:
         with open(filename, 'r') as file:
             source_code = file.read()
-    except IOError as e:
-        print(f"Error reading file {filename}: {e}")
-        sys.exit(1)
-    
-    try:
         tokens = tokenize(source_code)
-        # Uncomment the following line to print the token list for debugging:
-        # print("Tokens:", tokens)
-        
         pos = 0
         variables = set()
         procedures = {}
-        
-        ast = parse_program()
-        print("Parsed Program AST:")
-        print(ast)
+        parse_program()  # Si se parsea sin errores, el archivo es aceptado
+        return True
     except Exception as e:
-        print("Parsing error:", e)
-
-if __name__ == '__main__':
-    main()
+        # Se puede imprimir el error para depuración si se desea:
+        # print("Parsing error:", e)
+        return False
