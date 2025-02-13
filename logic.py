@@ -7,25 +7,19 @@ Utiliza expresiones regulares para el análisis léxico (tokenización) y un par
 recursivo-descendente basado en una gramática libre de contexto para verificar la sintaxis.
 
 El módulo expone la función check_file(filename) que retorna True si el archivo cumple
-con las reglas del lenguaje o False en caso contrario.
+con las reglas del lenguaje; False en caso contrario.
 """
 
 import re
-
-# Variables globales de estado del parser
-tokens = []   # Lista de tokens generada por tokenize()
-pos = 0       # Posición actual en la lista de tokens
-variables = set()   # Variables globales
-procedures = {}     # Procedimientos definidos
 
 # --------------------------------------------------
 # Tokenización (Lexer)
 # --------------------------------------------------
 def tokenize(text):
-    # El orden importa: tokens más largos como ":=" deben ir antes de ":".
+    # Order matters: longer tokens like ":=" must come before ":".
     token_specs = [
-        ('ASSIGN',   r':='),   # Operador de asignación
-        ('HASHID',   r'#[A-Za-z_][A-Za-z0-9_]*'),  # Ej: #chips, #north
+        ('ASSIGN',   r':='),   # operador de asignación
+        ('HASHID',   r'#[A-Za-z_][A-Za-z0-9_]*'),  # ej: #chips, #north
         ('NUMBER',   r'\d+'),
         ('ID',       r'[A-Za-z_][A-Za-z0-9_]*'),
         ('PIPE',     r'\|'),
@@ -33,7 +27,7 @@ def tokenize(text):
         ('RBRACKET', r'\]'),
         ('COLON',    r':'),
         ('DOT',      r'\.'),
-        ('COMMA',    r','),    # Para separar variables locales
+        ('COMMA',    r','),    # para separar variables locales
         ('SKIP',     r'[ \t]+'),
         ('NEWLINE',  r'\n'),
         ('MISMATCH', r'.'),
@@ -65,8 +59,14 @@ def tokenize(text):
     return tokens
 
 # --------------------------------------------------
-# Funciones auxiliares para el parser
+# Estado Global del Parser
 # --------------------------------------------------
+tokens = []   # Lista de tokens (se llena con tokenize)
+pos = 0       # Posición actual en la lista
+
+variables = set()   # Variables globales
+procedures = {}     # Procedimientos definidos
+
 def current_token():
     global tokens, pos
     if pos < len(tokens):
@@ -95,7 +95,7 @@ def error(message):
         raise Exception(f"Syntax error at end of input: {message}")
 
 # --------------------------------------------------
-# Funciones de Parsing (Parser Recursivo-Descendente)
+# Funciones del Parser (Recursivo-Descendente)
 # --------------------------------------------------
 
 # Programa -> VariableDeclaration ProcedureDefinitions MainBlock
@@ -142,17 +142,16 @@ def parse_procedure_definition():
     advance()
     
     params = []
-    # Parámetros: pueden indicarse con ":" o con una etiqueta alternativa (ej: "andBalloons:")
     while True:
         token = current_token()
         if token and token[0] == 'COLON':
-            advance()  # saltamos el ":"
+            advance()  # saltar ":"
             if current_token() is None or current_token()[0] != 'ID':
                 error("Expected parameter name after ':'")
             params.append(current_token()[1])
             advance()
         elif token and token[0] == 'ID' and token[1].startswith("and"):
-            advance()  # saltamos la etiqueta (ej: "andBalloons")
+            advance()  # saltar la etiqueta (ej: "andBalloons")
             expect('COLON')
             if current_token() is None or current_token()[0] != 'ID':
                 error("Expected parameter name after 'and...:'")
@@ -180,16 +179,12 @@ def parse_instruction():
     token = current_token()
     if token is None:
         error("Unexpected end of input in instruction")
-    # Declaración local de variables
     if token[0] == 'PIPE':
         return parse_variable_declaration()
-    # Estructuras de control: if o while
     if token[0] == 'ID' and token[1] in ('if', 'while'):
         return parse_control_structure()
-    # Asignación: si un ID es seguido por ":="
     if token[0] == 'ID' and (pos + 1 < len(tokens) and tokens[pos+1][0] == 'ASSIGN'):
         return parse_assignment()
-    # Por defecto, se asume que es una llamada a procedimiento.
     return parse_procedure_call()
 
 # Assignment -> ID ASSIGN Expression DOT
@@ -197,40 +192,35 @@ def parse_assignment():
     if current_token() is None or current_token()[0] != 'ID':
         error("Expected variable name in assignment")
     var_name = current_token()[1]
-    advance()  # consumir el nombre de la variable
+    advance()
     expect('ASSIGN')
     expr = parse_expression()
     expect('DOT')
     return ('assign', var_name, expr)
 
 # ProcedureCall -> ID { ParameterPart } [DOT]
-# ParameterPart -> [ Label ] COLON Expression
 def parse_procedure_call():
     global pos, tokens
     token = current_token()
     if token is None or token[0] != 'ID':
         error("Expected procedure name in procedure call")
     proc_name = token[1]
-    advance()  # consumir el nombre del procedimiento
+    advance()
     args = []
-    # Se buscan parámetros: pueden venir con o sin etiqueta.
     while current_token() is not None:
         token = current_token()
         if token[0] == 'COLON':
-            # Sin etiqueta: se consume el ":" y se analiza la expresión.
             advance()
             args.append(parse_expression())
         elif token[0] == 'ID':
-            # Si el siguiente token es ":" se interpreta que el ID es una etiqueta.
             if pos + 1 < len(tokens) and tokens[pos+1][0] == 'COLON':
-                advance()  # se salta la etiqueta (ej: "ofType" o "with")
+                advance()
                 expect('COLON')
                 args.append(parse_expression())
             else:
                 break
         else:
             break
-    # Se consume el punto final (DOT), que es opcional si el siguiente token es "RBRACKET"
     token = current_token()
     if token is not None and token[0] == 'DOT':
         advance()
@@ -316,6 +306,7 @@ def check_file(filename):
     """
     Lee el archivo cuyo nombre se pasa como parámetro, lo tokeniza y lo parsea.
     Retorna True si el archivo cumple con las reglas del lenguaje; False en caso contrario.
+    Además, para el caso global se exige que la declaración de variables tenga exactamente 4 identificadores.
     """
     global tokens, pos, variables, procedures
     try:
@@ -325,9 +316,15 @@ def check_file(filename):
         pos = 0
         variables = set()
         procedures = {}
-        parse_program()  # Si se parsea sin errores, el archivo es aceptado
+        program = parse_program()
+        # Verificar que la declaración global tenga exactamente 4 variables.
+        if len(program['variables']) != 4:
+            raise Exception("La declaración global de variables debe tener exactamente 4 identificadores.")
+        # Verificar que se hayan consumido todos los tokens.
+        if pos != len(tokens):
+            raise Exception("Se encontraron tokens extra al final de la entrada.")
         return True
     except Exception as e:
-        # Se puede imprimir el error para depuración si se desea:
+        # Para depuración se puede imprimir el error:
         # print("Parsing error:", e)
         return False
