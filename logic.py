@@ -4,38 +4,39 @@ logic.py
 
 This module contains the logic for our robot control language parser.
 It uses:
-  - Regular Expressions (see comments "regex") for lexical analysis (tokenization).
-  - A Recursive‑Descent Parser (see comments "grammar") based on a context‑free grammar.
-  - A Semantic Analysis phase (see comments "semantic analysis") that checks, for example,
-    that constants are used where required.
-    
-The module exposes the function check_file(filename), which returns True if the file
-satisfies the language rules; False otherwise.
+  - Regular Expressions (Regex) for lexical analysis.
+  - A Recursive‑Descent Parser (Grammar) based on a context‑free grammar.
+  - A Semantic Analysis phase to enforce that only allowed constants are used.
+  
+The module exposes the function check_file(filename), which returns True if the file complies with the language rules; False otherwise.
 """
 
 import re
 
 # --------------------------------------------------
-# Tokenization (Lexer) – using Regular Expressions (Regex)
+# Tokenization (Lexer) – using Regex
+# (Topic: Regular Expressions)
 # --------------------------------------------------
 def tokenize(text):
-    # The order of patterns is important; e.g., ":=" must be matched before ":".
+    # The order of patterns is important; longer tokens must come before shorter ones.
     token_specs = [
-        ('ASSIGN',   r':='),   # assignment operator (regex topic)
-        ('HASHID',   r'#[A-Za-z_][A-Za-z0-9_]*'),  # constants starting with '#' (regex)
+        ('ASSIGN',   r':='),   # assignment operator
+        # Here we "hardcode" the valid constants:
+        ('DIRECTION', r'#(north|south|east|west)'),  # allowed directions
+        ('TURN',      r'#(left|right|around)'),      # allowed turn directions
+        ('TYPE',      r'#(chips|balloons)'),          # allowed types
         ('NUMBER',   r'\d+'),
-        ('ID',       r'[A-Za-z_][A-Za-z0-9_]*'),
+        ('ID',       r'[A-Za-z_][A-Za-z0-9_]*'),      # identifiers (variables, procedure names, etc.)
         ('PIPE',     r'\|'),
         ('LBRACKET', r'\['),
         ('RBRACKET', r'\]'),
         ('COLON',    r':'),
-        ('DOT',      r'\.'), 
-        ('COMMA',    r','),    # used to separate local variables
-        ('SKIP',     r'[ \t]+'),  # whitespace to ignore
+        ('DOT',      r'\.'),
+        ('COMMA',    r','),    # for separating local variables
+        ('SKIP',     r'[ \t]+'),
         ('NEWLINE',  r'\n'),
         ('MISMATCH', r'.'),
     ]
-    # Build a master regular expression that matches any token (regex topic)
     token_regex = "|".join("(?P<%s>%s)" % (name, pattern) for name, pattern in token_specs)
     regex = re.compile(token_regex)
     
@@ -43,14 +44,13 @@ def tokenize(text):
     line_num = 1
     line_start = 0
     
-    # Scan through the input using the regular expression.
     for mo in regex.finditer(text):
         kind = mo.lastgroup
         value = mo.group()
         column = mo.start() - line_start
         if kind == 'NUMBER':
             tokens.append((kind, int(value), line_num, column))
-        elif kind in ('ID', 'HASHID'):
+        elif kind in ('ID', 'DIRECTION', 'TURN', 'TYPE'):
             tokens.append((kind, value, line_num, column))
         elif kind in ('PIPE', 'LBRACKET', 'RBRACKET', 'COLON', 'DOT', 'COMMA', 'ASSIGN'):
             tokens.append((kind, value, line_num, column))
@@ -65,10 +65,11 @@ def tokenize(text):
 
 # --------------------------------------------------
 # Global Parser State
+# (Topic: Grammar – Managing Tokens and Parser State)
 # --------------------------------------------------
-tokens = []       # List of tokens produced by tokenize() (grammar topic)
-pos = 0           # Current position in the token list
-variables = set() # Global variables declared at the start
+tokens = []       # List of tokens produced by tokenize()
+pos = 0           # Current position in the tokens list
+variables = set() # Global variables declared at the beginning
 procedures = {}   # Procedures defined in the program
 
 def current_token():
@@ -82,7 +83,7 @@ def advance():
     pos += 1
 
 def expect(token_type, token_value=None):
-    # This function implements the concept of "matching a terminal" from the grammar.
+    # This function matches a specific terminal from our grammar.
     token = current_token()
     if token is None:
         error("Unexpected end of input")
@@ -100,34 +101,31 @@ def error(message):
         raise Exception(f"Syntax error at end of input: {message}")
 
 # --------------------------------------------------
-# Parser Functions (Recursive-Descent Parser)
-# (These functions implement the production rules of the grammar)
+# Parser Functions (Recursive‑Descent Parsing – Grammar)
+# (Topic: Context-Free Grammars and Parsing)
 # --------------------------------------------------
 
-# The top-level production: Program -> VariableDeclaration ProcedureDefinitions MainBlock
 def parse_program():
+    # Program -> VariableDeclaration ProcedureDefinitions MainBlock
     program = {}
-    # Global variable declaration (if present)
     if current_token() and current_token()[0] == 'PIPE':
         program['variables'] = parse_variable_declaration()
     else:
         program['variables'] = []
     
-    # Parse procedure definitions (zero or more)
     proc_defs = []
     while current_token() and current_token()[0] == 'ID' and current_token()[1] == 'proc':
         proc_defs.append(parse_procedure_definition())
     program['procedures'] = proc_defs
     
-    # Parse the main code block (if present)
     if current_token() and current_token()[0] == 'LBRACKET':
         program['main'] = parse_code_block()
     else:
         program['main'] = []
     return program
 
-# VariableDeclaration -> "|" IdentifierList "|"
 def parse_variable_declaration():
+    # VariableDeclaration -> "|" IdentifierList "|"
     vars_list = []
     expect('PIPE')
     while current_token() and current_token()[0] == 'ID':
@@ -139,8 +137,8 @@ def parse_variable_declaration():
     expect('PIPE')
     return vars_list
 
-# ProcedureDefinition -> "proc" Identifier { (COLON | (ID starting with "and")) Parameter } CodeBlock
 def parse_procedure_definition():
+    # ProcedureDefinition -> "proc" Identifier { (COLON | (ID starting with "and")) Parameter } CodeBlock
     expect('ID', 'proc')
     if current_token() is None or current_token()[0] != 'ID':
         error("Expected procedure name after 'proc'")
@@ -151,13 +149,13 @@ def parse_procedure_definition():
     while True:
         token = current_token()
         if token and token[0] == 'COLON':
-            advance()  # Skip the colon
+            advance()  # Skip ":"
             if current_token() is None or current_token()[0] != 'ID':
                 error("Expected parameter name after ':'")
             params.append(current_token()[1])
             advance()
         elif token and token[0] == 'ID' and token[1].startswith("and"):
-            advance()  # Skip the alternative label (e.g., "andBalloons")
+            advance()  # Skip alternative label (e.g., "andBalloons")
             expect('COLON')
             if current_token() is None or current_token()[0] != 'ID':
                 error("Expected parameter name after 'and...:'")
@@ -171,8 +169,8 @@ def parse_procedure_definition():
     procedures[proc_name] = proc_def
     return proc_def
 
-# CodeBlock -> "[" InstructionList "]"
 def parse_code_block():
+    # CodeBlock -> "[" InstructionList "]"
     expect('LBRACKET')
     instrs = []
     while current_token() and current_token()[0] != 'RBRACKET':
@@ -180,8 +178,8 @@ def parse_code_block():
     expect('RBRACKET')
     return instrs
 
-# Instruction -> VariableDeclaration | Assignment | ControlStructure | ProcedureCall
 def parse_instruction():
+    # Instruction -> VariableDeclaration | Assignment | ControlStructure | ProcedureCall
     token = current_token()
     if token is None:
         error("Unexpected end of input in instruction")
@@ -193,8 +191,8 @@ def parse_instruction():
         return parse_assignment()
     return parse_procedure_call()
 
-# Assignment -> ID ASSIGN Expression DOT
 def parse_assignment():
+    # Assignment -> ID ASSIGN Expression DOT
     if current_token() is None or current_token()[0] != 'ID':
         error("Expected variable name in assignment")
     var_name = current_token()[1]
@@ -202,11 +200,10 @@ def parse_assignment():
     expect('ASSIGN')
     expr = parse_expression()
     expect('DOT')
-    # (grammar: assignment production)
     return ('assign', var_name, expr)
 
-# ProcedureCall -> ID { ParameterPart } [DOT]
 def parse_procedure_call():
+    # ProcedureCall -> ID { ParameterPart } [DOT]
     global pos, tokens
     token = current_token()
     if token is None or token[0] != 'ID':
@@ -221,7 +218,7 @@ def parse_procedure_call():
             args.append(parse_expression())
         elif token[0] == 'ID':
             if pos + 1 < len(tokens) and tokens[pos+1][0] == 'COLON':
-                advance()  # Skip label (e.g., "ofType", "with", etc.)
+                advance()  # Skip label (e.g., "ofType", "with")
                 expect('COLON')
                 args.append(parse_expression())
             else:
@@ -233,11 +230,10 @@ def parse_procedure_call():
         advance()
     elif token is not None and token[0] != 'RBRACKET':
         error("Expected token type DOT or end-of-block but got " + str(token))
-    # (grammar: procedure call production)
     return ('proc_call', proc_name, args)
 
-# ControlStructure -> WhileStructure | IfStructure
 def parse_control_structure():
+    # ControlStructure -> WhileStructure | IfStructure
     token = current_token()
     if token[0] == 'ID' and token[1] == 'while':
         return parse_while_structure()
@@ -246,8 +242,8 @@ def parse_control_structure():
     else:
         error("Unknown control structure")
 
-# WhileStructure -> "while" COLON Condition "do" COLON CodeBlock
 def parse_while_structure():
+    # WhileStructure -> "while" COLON Condition "do" COLON CodeBlock
     expect('ID', 'while')
     expect('COLON')
     cond = parse_condition()
@@ -264,8 +260,8 @@ def parse_while_structure():
     block = parse_code_block()
     return ('while', cond_parts, block)
 
-# IfStructure -> "if" COLON Condition "then" COLON CodeBlock [ "else" COLON CodeBlock ]
 def parse_if_structure():
+    # IfStructure -> "if" COLON Condition "then" COLON CodeBlock [ "else" COLON CodeBlock ]
     expect('ID', 'if')
     expect('COLON')
     cond = parse_condition()
@@ -287,42 +283,45 @@ def parse_if_structure():
         else_block = parse_code_block()
     return ('if', cond_parts, then_block, else_block)
 
-# Condition is treated simply as an expression in this parser.
 def parse_condition():
+    # Condition is parsed as an expression.
     return parse_expression()
 
 # --------------------------------------------------
-# Expression Parsing – Using Grammar and Tagging (for Semantic Analysis)
+# Expression Parsing – Using Grammar and Tagging (Semantic Preparation)
 # (Topic: Context-Free Grammars and Expression Parsing)
 # --------------------------------------------------
 def parse_expression():
     token = current_token()
     if token is None:
         error("Expected an expression but found end of input")
-    # If the token is a number, return a tuple tagged as 'num'
+    # For numbers, return a tuple tagged as 'num'
     if token[0] == 'NUMBER':
         value = token[1]
         advance()
         return ('num', value)
-    # If the token is a HASHID, return a tuple tagged as 'const' (constant)
-    elif token[0] == 'HASHID':
+    # For tokens representing allowed constants (DIRECTION, TURN, or TYPE), return them as 'const'
+    elif token[0] in ('DIRECTION', 'TURN', 'TYPE'):
         value = token[1]
         advance()
         return ('const', value)
-    # If the token is an ID (variable), return a tuple tagged as 'id'
+    # Otherwise, if it's an identifier (variable), return a tuple tagged as 'id'
     elif token[0] == 'ID':
         value = token[1]
         advance()
         return ('id', value)
     else:
-        error("Expected an expression (NUMBER, ID, or HASHID)")
+        error("Expected an expression (NUMBER, ID, or valid constant)")
 
 # --------------------------------------------------
-# Semantic Analysis – Enforce constant usage where required
+# Semantic Analysis – Enforcing Allowed Constants
 # (Topic: Semantic Analysis)
 # --------------------------------------------------
+ALLOWED_DIRECTIONS = {'#north', '#south', '#east', '#west'}
+ALLOWED_TURNS = {'#left', '#right', '#around'}
+ALLOWED_TYPES = {'#chips', '#balloons'}
+
 def check_semantics(node):
-    # Recursively traverse the AST and enforce that specific commands use constants.
     if isinstance(node, dict):
         for key, value in node.items():
             check_semantics(value)
@@ -330,39 +329,31 @@ def check_semantics(node):
         for item in node:
             check_semantics(item)
     elif isinstance(node, tuple):
+        # Example: enforce that the 'face' command must have a valid direction constant.
         if node[0] == 'proc_call':
             proc_name = node[1]
             args = node[2]
-            # Example semantic rules:
             if proc_name == 'face':
-                # The 'face' command must have a constant as its first argument.
-                if len(args) < 1 or args[0][0] != 'const':
-                    raise Exception("Semantic error: 'face' command requires a constant argument (e.g., #north).")
+                if len(args) < 1 or args[0][0] != 'const' or args[0][1] not in ALLOWED_DIRECTIONS:
+                    raise Exception("Semantic error: 'face' command requires a valid direction constant (e.g., #north).")
             elif proc_name == 'turn':
-                # The 'turn' command must have a constant (e.g., #left, #right, or #around)
-                if len(args) < 1 or args[0][0] != 'const':
-                    raise Exception("Semantic error: 'turn' command requires a constant argument (e.g., #left).")
-            elif proc_name == 'put':
-                # The 'put' command should have at least two arguments and the second must be constant.
-                if len(args) < 2 or args[1][0] != 'const':
-                    raise Exception("Semantic error: 'put' command requires a constant type argument (e.g., #chips).")
-            elif proc_name == 'pick':
-                # The 'pick' command should have at least two arguments and the second must be constant.
-                if len(args) < 2 or args[1][0] != 'const':
-                    raise Exception("Semantic error: 'pick' command requires a constant type argument (e.g., #balloons).")
-        # Recursively check all tuple items.
+                if len(args) < 1 or args[0][0] != 'const' or args[0][1] not in ALLOWED_TURNS:
+                    raise Exception("Semantic error: 'turn' command requires a valid turn constant (e.g., #left).")
+            elif proc_name in ('put', 'pick'):
+                if len(args) < 2 or args[1][0] != 'const' or args[1][1] not in ALLOWED_TYPES:
+                    raise Exception("Semantic error: 'put'/'pick' command requires a valid type constant (e.g., #chips).")
         for item in node:
             check_semantics(item)
 
 # --------------------------------------------------
-# Main Function for Logic – Integrates Lexing, Parsing, and Semantic Checks
+# Main Function for Logic – Integrates Lexing, Parsing, and Semantic Analysis
 # (Topics: Regex, CFG, and Semantic Analysis)
 # --------------------------------------------------
 def check_file(filename):
     """
-    Reads the file, tokenizes it, parses it, and performs semantic checks.
+    Reads the file, tokenizes it, parses it, and performs semantic analysis.
     Returns True if the file fully complies with the language rules; False otherwise.
-    Additionally, for the global case, the variable declaration must contain exactly 4 identifiers.
+    Also, the global variable declaration must contain exactly 4 identifiers.
     """
     global tokens, pos, variables, procedures
     try:
@@ -373,13 +364,13 @@ def check_file(filename):
         variables = set()
         procedures = {}
         program = parse_program()
-        # Semantic requirement: global variable declaration must have exactly 4 identifiers.
+        # Enforce that the global variable declaration has exactly 4 identifiers.
         if len(program['variables']) != 4:
             raise Exception("Global variable declaration must have exactly 4 identifiers.")
-        # Ensure that all tokens were consumed.
+        # Ensure that all tokens have been consumed.
         if pos != len(tokens):
             raise Exception("Extra tokens found at the end of the input.")
-        # Perform semantic analysis on the AST.
+        # Perform semantic analysis.
         check_semantics(program)
         return True
     except Exception as e:
